@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+.idea/
+save/*.json
+.pytest_cache/
