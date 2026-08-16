@@ -27,12 +27,16 @@ FALL_SPEED_START = 4  # px/frame
 FALL_SPEED_MAX = 10
 FALL_SPEED_RAMP_PER_POINT = 0.4
 
+STAR_SIZE = (50, 50)
+HUD_MARGIN = 50  # clear of the two-tile-thick wall border
+HUD_PADDING = 8
+
 
 class CatchStarsScene(scb.Scene):
-    """Catch the falling stuffed animal, dodge the red X. Reuses existing
-    art (the player's own sprite as the basket, pooh.png, x_mark_red.png)
-    since there's no dedicated art for a third minigame yet. First minigame
-    with an actual lose condition, for a bit of replay variety."""
+    """Catch the falling star, dodge the red X. The basket is the player's
+    own sprite; the star is drawn rather than loaded, since there's no
+    dedicated art for a third minigame yet. First minigame with an actual
+    lose condition, for a bit of replay variety."""
 
     def __init__(self, state):
         super().__init__()
@@ -45,8 +49,8 @@ class CatchStarsScene(scb.Scene):
         )
 
         self.good_item_template = {
-            "frame": viz.load_static_frame("sprites/characters/pooh.png", 60, 100, 0.6),
-            "width": int(60 * 0.6), "height": int(100 * 0.6),
+            "frame": viz.render_star(STAR_SIZE, clr.YELLOW, outline_color=clr.BLACK),
+            "width": STAR_SIZE[0], "height": STAR_SIZE[1],
         }
         self.bad_item_template = {
             "frame": viz.load_static_frame("sprites/shapes/x_mark_red.png", 90, 90, 0.5),
@@ -133,11 +137,22 @@ class CatchStarsScene(scb.Scene):
             screen.blit(item["frame"], (item["x"], item["y"]))
         screen.blit(self.basket_frame, self.basket_position)
 
-        hud = fnt.small_font.render(f"Score: {self.score}   Lives: {self.lives}", True, clr.BLACK)
-        screen.blit(hud, (20, 20))
+        self._draw_hud(screen)
 
         if self.won or self.lost:
             self._finish(screen, won=self.won)
+
+    def _draw_hud(self, screen):
+        # White-on-translucent-black reads over any floor/wall color the
+        # room might use, and sitting past HUD_MARGIN keeps it off the
+        # wall border instead of getting drawn half inside it.
+        hud_text = fnt.small_font.render(f"Score: {self.score}   Lives: {self.lives}", True, clr.WHITE)
+        backing = pygame.Surface(
+            (hud_text.get_width() + 2 * HUD_PADDING, hud_text.get_height() + 2 * HUD_PADDING), pygame.SRCALPHA
+        )
+        backing.fill((0, 0, 0, 150))
+        screen.blit(backing, (HUD_MARGIN, HUD_MARGIN))
+        screen.blit(hud_text, (HUD_MARGIN + HUD_PADDING, HUD_MARGIN + HUD_PADDING))
 
     def _finish(self, screen, won):
         message = "GREAT JOB!" if won else "Nice Try!"

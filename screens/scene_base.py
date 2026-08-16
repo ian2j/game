@@ -71,3 +71,9 @@ def run(screen, initial_scene, fps=60):
             sys.exit()
         elif scene.next_scene is not None:
             scene = scene.next_scene
+            # A scene object can be reused later (e.g. handed out as a
+            # pause menu's resume_scene or an options menu's return_scene).
+            # Without this reset, its next_scene from the *previous* time it
+            # was active is still sitting there, and it would immediately
+            # bounce right back out again the moment it becomes current.
+            scene.next_scene = None

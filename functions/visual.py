@@ -1,3 +1,5 @@
+import math
+
 import pygame
 
 
@@ -33,3 +35,24 @@ def load_static_frame(path, width, height, scale=1):
     rather than a full animated sheet."""
     sheet = pygame.image.load(path).convert_alpha()
     return get_frame(sheet=sheet, frame_width=width, frame_height=height, column=0, row=0, scale_factor=scale)
+
+
+def render_star(size, fill_color, outline_color=None):
+    """Draw a five-pointed star on a transparent surface. Lets a screen use
+    a star as a game piece without needing dedicated art for it."""
+    width, height = size
+    surface = pygame.Surface(size, pygame.SRCALPHA)
+    center_x, center_y = width / 2, height / 2
+    outer_radius = min(width, height) / 2
+    inner_radius = outer_radius * 0.4
+
+    points = []
+    for i in range(10):
+        angle = -math.pi / 2 + i * math.pi / 5
+        radius = outer_radius if i % 2 == 0 else inner_radius
+        points.append((center_x + radius * math.cos(angle), center_y + radius * math.sin(angle)))
+
+    pygame.draw.polygon(surface, fill_color, points)
+    if outline_color is not None:
+        pygame.draw.polygon(surface, outline_color, points, width=2)
+    return surface

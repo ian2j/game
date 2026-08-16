@@ -85,10 +85,14 @@ class FindPoohScene(scb.Scene):
         elif event.key == pygame.K_SPACE:
             self.show_instructions = False
             if self.pooh_visible:
-                self._move_pooh_into_box(screen)
-                self._shuffle_boxes(screen)
+                if self._move_pooh_into_box(screen):
+                    return  # paused/quit mid-animation
+                if self._shuffle_boxes(screen):
+                    return
             else:
                 correct = self._move_pooh_outside_box(screen)
+                if correct is None:
+                    return  # paused/quit mid-animation
                 self.rounds_played += 1
                 if correct:
                     self.correct_guesses += 1
@@ -110,6 +114,20 @@ class FindPoohScene(scb.Scene):
             self.black_arrow_box = order[(current + 1) % len(order)]
 
     # --- blocking animations (self-contained, don't call other scenes) --
+
+    def _animation_should_abort(self, screen):
+        """Pump events during a blocking animation and check for Escape or
+        window-close. Without this, these multi-second animations swallow
+        input until they finish, making Escape feel unresponsive - which is
+        exactly what made this minigame hard to pause."""
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self.next_scene = scb.QUIT
+                return True
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                self.next_scene = screens.menu_pause.PauseMenuScene(resume_scene=self, state=self.state)
+                return True
+        return False
 
     def _draw_transit_frame(self, screen, show_indicators):
         screen.fill(clr.WHITE)
@@ -134,14 +152,19 @@ class FindPoohScene(scb.Scene):
             self.pooh_position = (pooh_x, pooh_y)
             self._draw_transit_frame(screen, show_indicators=False)
             self.clock.tick(30)
+            if self._animation_should_abort(screen):
+                return True
         while abs(pooh_y - box_y) > 5:
             pooh_y += (box_y - pooh_y) / 10
             self.pooh_position = (pooh_x, pooh_y)
             self._draw_transit_frame(screen, show_indicators=False)
             self.clock.tick(30)
+            if self._animation_should_abort(screen):
+                return True
 
         self.pooh_visible = False
         self.black_arrow_visible = True
+        return False
 
     def _move_pooh_outside_box(self, screen):
         box = self.pooh_box
@@ -163,11 +186,15 @@ class FindPoohScene(scb.Scene):
             self.pooh_position = (pooh_x, pooh_y)
             self._draw_transit_frame(screen, show_indicators=True)
             self.clock.tick(30)
+            if self._animation_should_abort(screen):
+                return None
         while abs(pooh_x - final_x) > 2:
             pooh_x += (final_x - pooh_x) / 10
             self.pooh_position = (pooh_x, pooh_y)
             self._draw_transit_frame(screen, show_indicators=True)
             self.clock.tick(30)
+            if self._animation_should_abort(screen):
+                return None
 
         self.green_circle_visible = False
         self.red_x_visible = False
@@ -207,9 +234,12 @@ class FindPoohScene(scb.Scene):
                 self._draw_boxes(screen)
                 pygame.display.flip()
                 self.clock.tick(60)
+                if self._animation_should_abort(screen):
+                    return True
 
         order = boxes_left_to_right(self.boxes)
         self.black_arrow_box = order[0]
+        return False
 
     # --- drawing ----------------------------------------------------------
 
