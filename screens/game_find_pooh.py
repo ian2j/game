@@ -1,464 +1,276 @@
+import numpy as np
 import pygame
-import objects.sprite_sheets as sps
-import constants.fonts as fnt
-import constants.dimensions as dms
+
 import constants.colors as clr
-import constants.flags as flg
-import constants.settings as stt
+import constants.dimensions as dms
+import constants.fonts as fnt
 import functions.audio as aud
 import functions.visual as viz
-import screens.menu_pause
+import objects.tilemap as tmp
 import screens.menu_end_minigame
-import numpy as np
-import sys
+import screens.menu_pause
+import screens.scene_base as scb
+
+POOH_WIDTH, POOH_HEIGHT, POOH_SCALE = 60, 100, 1.5
+GREEN_CIRCLE_WIDTH, GREEN_CIRCLE_HEIGHT = 90, 90
+RED_X_WIDTH, RED_X_HEIGHT = 90, 90
+BLACK_ARROW_WIDTH, BLACK_ARROW_HEIGHT = 90, 150
+N_BOXES = 3
+BOX_WIDTH, BOX_HEIGHT, BOX_SPACING = 90, 150, 200
+WIN_TARGET_CORRECT_GUESSES = 3
 
 
-def show_game_find_pooh(screen, game_variables):
-    # pygame.time.wait(300)
-    if not flg.PYGAME_MIXER_INITIALIZED:
-        aud.start_mixer()
-    aud.load_music(filename="sounds/sample_music_3.mp3")
-    aud.play_music_on_loop()
+def boxes_left_to_right(boxes):
+    """boxes: {box_id: {'position_x': float, ...}} -> box ids ordered by
+    their current x position. Pure logic (no pygame) so it's unit-testable;
+    the original had this exact sort-and-lookup copy-pasted three times."""
+    return [
+        box_id for box_id, _ in
+        sorted(((box_id, box["position_x"]) for box_id, box in boxes.items()), key=lambda item: item[1])
+    ]
 
-    tile_map = np.zeros(int(dms.SCREEN_HEIGHT / dms.TILE_SIZE) * int(dms.SCREEN_WIDTH / dms.TILE_SIZE)).reshape(
-        int(dms.SCREEN_HEIGHT / dms.TILE_SIZE),
-        int(dms.SCREEN_WIDTH / dms.TILE_SIZE)
-    )
-    tile_map[:, :2] = 1
-    tile_map[:, -2:] = 1
-    tile_map[:2, :] = 1
-    tile_map[-2:, :] = 1
 
-    def draw_tile_map():
-        for row in range(len(tile_map)):
-            for col in range(len(tile_map[row])):
-                tile = tile_map[row][col]
-                x = col * dms.TILE_SIZE
-                y = row * dms.TILE_SIZE
-                if tile == 1:  # Wall
-                    pygame.draw.rect(screen, clr.DARK_GREEN, rect=(x, y, dms.TILE_SIZE, dms.TILE_SIZE))
-                elif tile == 0:  # Floor
-                    pygame.draw.rect(screen, clr.LIGHT_GREY, rect=(x, y, dms.TILE_SIZE, dms.TILE_SIZE))
+class FindPoohScene(scb.Scene):
+    def __init__(self, state):
+        super().__init__()
+        self.state = state
+        aud.play_looping_track(filename="sounds/sample_music_3.mp3")
 
-    # Pooh
-    POOH_WIDTH = 60
-    POOH_HEIGHT = 100
-    POOH = {
-        'visible': True,
-        'box': -1,
-        'sprite_sheet': sps.SpriteSheet()
-    }
-    POOH['sprite_sheet'].set_sprite_sheet(sprite_sheet='sprites/characters/pooh.png')
-    POOH['sprite_sheet'].set_frame_width(frame_width=POOH_WIDTH)
-    POOH['sprite_sheet'].set_frame_height(frame_height=POOH_HEIGHT)
-    POOH['sprite_sheet'].set_scale(scale=1.5)
-    POOH_frame = viz.get_frame(
-        sheet=POOH['sprite_sheet'].sprite_sheet,
-        frame_width=POOH['sprite_sheet'].frame_width,
-        frame_height=POOH['sprite_sheet'].frame_height,
-        row=0,
-        column=0,
-        scale_factor=POOH['sprite_sheet'].scale
-    )
-    POOH_position = (dms.SCREEN_WIDTH/2-POOH_WIDTH/2*POOH['sprite_sheet'].scale, 80)
-    POOH['sprite_sheet'].set_position(position=POOH_position)
+        self.tile_map = tmp.TileMap(
+            width=dms.SCREEN_WIDTH, height=dms.SCREEN_HEIGHT, tile_size=dms.TILE_SIZE,
+            wall_color=clr.DARK_GREEN, floor_color=clr.LIGHT_GREY,
+        )
+        self.clock = pygame.time.Clock()  # paces the blocking animation helpers below
 
-    # Green circle
-    GREEN_CIRCLE_WIDTH = 90
-    GREEN_CIRCLE_HEIGHT = 90
-    GREEN_CIRCLE = {
-        'visible': False,
-        'sprite_sheet': sps.SpriteSheet()
-    }
-    GREEN_CIRCLE['sprite_sheet'].set_sprite_sheet(sprite_sheet='sprites/shapes/circle_green.png')
-    GREEN_CIRCLE['sprite_sheet'].set_frame_width(frame_width=GREEN_CIRCLE_WIDTH)
-    GREEN_CIRCLE['sprite_sheet'].set_frame_height(frame_height=GREEN_CIRCLE_HEIGHT)
-    GREEN_CIRCLE['sprite_sheet'].set_scale(scale=1)
-    GREEN_CIRCLE_frame = viz.get_frame(
-        sheet=GREEN_CIRCLE['sprite_sheet'].sprite_sheet,
-        frame_width=GREEN_CIRCLE['sprite_sheet'].frame_width,
-        frame_height=GREEN_CIRCLE['sprite_sheet'].frame_height,
-        row=0,
-        column=0,
-        scale_factor=GREEN_CIRCLE['sprite_sheet'].scale
-    )
-    GREEN_CIRCLE_position = (dms.SCREEN_WIDTH / 2 - GREEN_CIRCLE_WIDTH / 2 * GREEN_CIRCLE['sprite_sheet'].scale, 500)
-    GREEN_CIRCLE['sprite_sheet'].set_position(position=GREEN_CIRCLE_position)
+        self.pooh_frame = viz.load_static_frame("sprites/characters/pooh.png", POOH_WIDTH, POOH_HEIGHT, POOH_SCALE)
+        self.green_circle_frame = viz.load_static_frame(
+            "sprites/shapes/circle_green.png", GREEN_CIRCLE_WIDTH, GREEN_CIRCLE_HEIGHT, 1
+        )
+        self.red_x_frame = viz.load_static_frame("sprites/shapes/x_mark_red.png", RED_X_WIDTH, RED_X_HEIGHT, 1)
+        self.black_arrow_frame = viz.load_static_frame(
+            "sprites/shapes/up_arrow_black.png", BLACK_ARROW_WIDTH, BLACK_ARROW_HEIGHT, 1
+        )
 
-    # Red X
-    RED_X_WIDTH = 90
-    RED_X_HEIGHT = 90
-    RED_X = {
-        'visible': False,
-        'sprite_sheet': sps.SpriteSheet()
-    }
-    RED_X['sprite_sheet'].set_sprite_sheet(sprite_sheet='sprites/shapes/x_mark_red.png')
-    RED_X['sprite_sheet'].set_frame_width(frame_width=RED_X_WIDTH)
-    RED_X['sprite_sheet'].set_frame_height(frame_height=RED_X_HEIGHT)
-    RED_X['sprite_sheet'].set_scale(scale=1)
-    RED_X_frame = viz.get_frame(
-        sheet=RED_X['sprite_sheet'].sprite_sheet,
-        frame_width=RED_X['sprite_sheet'].frame_width,
-        frame_height=RED_X['sprite_sheet'].frame_height,
-        row=0,
-        column=0,
-        scale_factor=RED_X['sprite_sheet'].scale
-    )
-    RED_X_position = (dms.SCREEN_WIDTH / 2 - RED_X_WIDTH / 2 * RED_X['sprite_sheet'].scale, 550)
-    RED_X['sprite_sheet'].set_position(position=RED_X_position)
+        self.pooh_position = self._pooh_home_position()
+        self.pooh_visible = True
+        self.pooh_box = -1
+        self.green_circle_visible = False
+        self.red_x_visible = False
+        self.black_arrow_visible = False
+        self.black_arrow_box = 0
 
-    # Black arrow
-    BLACK_ARROW_WIDTH = 90
-    BLACK_ARROW_HEIGHT = 150
-    BLACK_ARROW = {
-        'visible': False,
-        'box': 0,
-        'sprite_sheet': sps.SpriteSheet()
-    }
-    BLACK_ARROW['sprite_sheet'].set_sprite_sheet(sprite_sheet='sprites/shapes/up_arrow_black.png')
-    BLACK_ARROW['sprite_sheet'].set_frame_width(frame_width=BLACK_ARROW_WIDTH)
-    BLACK_ARROW['sprite_sheet'].set_frame_height(frame_height=BLACK_ARROW_HEIGHT)
-    BLACK_ARROW['sprite_sheet'].set_scale(scale=1)
-    BLACK_ARROW_frame = viz.get_frame(
-        sheet=BLACK_ARROW['sprite_sheet'].sprite_sheet,
-        frame_width=BLACK_ARROW['sprite_sheet'].frame_width,
-        frame_height=BLACK_ARROW['sprite_sheet'].frame_height,
-        row=0,
-        column=0,
-        scale_factor=BLACK_ARROW['sprite_sheet'].scale
-    )
-    BLACK_ARROW_position = (dms.SCREEN_WIDTH / 2 - BLACK_ARROW_WIDTH / 2 * BLACK_ARROW['sprite_sheet'].scale, 550)
-    BLACK_ARROW['sprite_sheet'].set_position(position=BLACK_ARROW_position)
-
-    N_BOXES = 3
-    BOX_WIDTH = 90
-    BOX_HEIGHT = 150
-    BOXES = {}
-    BOX_SPACING = 200
-    for i in range(N_BOXES):
-        BOXES[i] = {
-            'position_x': dms.SCREEN_WIDTH/2-POOH_WIDTH/2*POOH['sprite_sheet'].scale+BOX_SPACING*(i-(N_BOXES-1)/2),
-            'position_y': 325,
+        self.boxes = {
+            i: {
+                "position_x": dms.SCREEN_WIDTH / 2 - POOH_WIDTH / 2 * POOH_SCALE + BOX_SPACING * (i - (N_BOXES - 1) / 2),
+                "position_y": 325,
+            }
+            for i in range(N_BOXES)
         }
 
-    def draw_green_circle():
-        if GREEN_CIRCLE['visible'] and POOH['box'] > -1:
-            box = BLACK_ARROW['box']
-            box_x = BOXES[box]['position_x']
-            GREEN_CIRCLE_position = (box_x, 500)
-            GREEN_CIRCLE['sprite_sheet'].set_position(position=GREEN_CIRCLE_position)
-            screen.blit(GREEN_CIRCLE_frame, GREEN_CIRCLE_position)
-        return None
+        self.show_instructions = True
+        self.correct_guesses = 0
+        self.rounds_played = 0
+        self.won = False
 
-    def draw_red_x():
-        if RED_X['visible'] and POOH['box'] > -1:
-            box = BLACK_ARROW['box']
-            box_x = BOXES[box]['position_x']
-            RED_X_position = (box_x, 500)
-            RED_X['sprite_sheet'].set_position(position=RED_X_position)
-            screen.blit(RED_X_frame, RED_X_position)
-        return None
+    def _pooh_home_position(self):
+        return dms.SCREEN_WIDTH / 2 - POOH_WIDTH / 2 * POOH_SCALE, 80
 
-    def draw_black_arrow():
-        if BLACK_ARROW['visible']:
-            box = BLACK_ARROW['box']
-            box_x = BOXES[box]['position_x']
-            BLACK_ARROW_position = (box_x, 500)
-            BLACK_ARROW['sprite_sheet'].set_position(position=BLACK_ARROW_position)
-            screen.blit(BLACK_ARROW_frame, BLACK_ARROW_position)
-        return None
+    # --- discrete input -------------------------------------------------
 
-    def move_black_arrow(direction):
-        BOX_X_POSITIONS = [(box, BOXES[box]['position_x']) for box in BOXES]
-        BOX_X_POSITIONS = sorted(BOX_X_POSITIONS, key=lambda x: x[1])
-        ORDER = {box: index for index, box in enumerate([x[0] for x in BOX_X_POSITIONS])}
-        ORDER_LOOKUP = {index: box for index, box in enumerate([x[0] for x in BOX_X_POSITIONS])}
-
-        if BLACK_ARROW['visible']:
-            if direction == 'left' and ORDER[BLACK_ARROW['box']] == 0:
-                BLACK_ARROW['box'] = ORDER_LOOKUP[N_BOXES - 1]
-            elif direction == 'left' and ORDER[BLACK_ARROW['box']] > 0:
-                BLACK_ARROW['box'] = ORDER_LOOKUP[ORDER[BLACK_ARROW['box']]-1]
-            elif direction == 'right' and ORDER[BLACK_ARROW['box']] < N_BOXES - 1:
-                BLACK_ARROW['box'] = ORDER_LOOKUP[ORDER[BLACK_ARROW['box']]+1]
-            elif direction == 'right' and ORDER[BLACK_ARROW['box']] == N_BOXES - 1:
-                BLACK_ARROW['box'] = ORDER_LOOKUP[0]
+    def handle_event(self, event, screen):
+        if event.type != pygame.KEYDOWN or self.won:
+            return
+        if event.key == pygame.K_ESCAPE:
+            self.next_scene = screens.menu_pause.PauseMenuScene(resume_scene=self, state=self.state)
+        elif event.key == pygame.K_SPACE:
+            self.show_instructions = False
+            if self.pooh_visible:
+                self._move_pooh_into_box(screen)
+                self._shuffle_boxes(screen)
             else:
-                pass
-        return None
+                correct = self._move_pooh_outside_box(screen)
+                self.rounds_played += 1
+                if correct:
+                    self.correct_guesses += 1
+                if self.correct_guesses >= WIN_TARGET_CORRECT_GUESSES:
+                    self.won = True
+        elif event.key == pygame.K_LEFT:
+            self._move_black_arrow("left")
+        elif event.key == pygame.K_RIGHT:
+            self._move_black_arrow("right")
 
-    def draw_boxes():
-        for box in BOXES:
+    def _move_black_arrow(self, direction):
+        if not self.black_arrow_visible:
+            return
+        order = boxes_left_to_right(self.boxes)
+        current = order.index(self.black_arrow_box)
+        if direction == "left":
+            self.black_arrow_box = order[(current - 1) % len(order)]
+        elif direction == "right":
+            self.black_arrow_box = order[(current + 1) % len(order)]
+
+    # --- blocking animations (self-contained, don't call other scenes) --
+
+    def _draw_transit_frame(self, screen, show_indicators):
+        screen.fill(clr.WHITE)
+        self.tile_map.draw(screen)
+        screen.blit(self.pooh_frame, self.pooh_position)
+        self._draw_boxes(screen)
+        if show_indicators:
+            self._draw_green_circle(screen)
+            self._draw_red_x(screen)
+            self._draw_black_arrow(screen)
+        pygame.display.flip()
+
+    def _move_pooh_into_box(self, screen):
+        box = np.random.choice(a=list(self.boxes), size=1, replace=False).tolist()[0]
+        self.pooh_box = box
+        box_x = self.boxes[box]["position_x"]
+        box_y = self.boxes[box]["position_y"]
+        pooh_x, pooh_y = self.pooh_position
+
+        while abs(pooh_x - box_x) > 2:
+            pooh_x += (box_x - pooh_x) / 10
+            self.pooh_position = (pooh_x, pooh_y)
+            self._draw_transit_frame(screen, show_indicators=False)
+            self.clock.tick(30)
+        while abs(pooh_y - box_y) > 5:
+            pooh_y += (box_y - pooh_y) / 10
+            self.pooh_position = (pooh_x, pooh_y)
+            self._draw_transit_frame(screen, show_indicators=False)
+            self.clock.tick(30)
+
+        self.pooh_visible = False
+        self.black_arrow_visible = True
+
+    def _move_pooh_outside_box(self, screen):
+        box = self.pooh_box
+        self.pooh_visible = True
+        self.black_arrow_visible = False
+        correct = self.black_arrow_box == box
+        if correct:
+            self.green_circle_visible = True
+        else:
+            self.red_x_visible = True
+
+        final_x, final_y = self._pooh_home_position()
+        pooh_x = self.boxes[box]["position_x"]
+        pooh_y = self.boxes[box]["position_y"]
+        self.pooh_position = (pooh_x, pooh_y)
+
+        while abs(pooh_y - final_y) > 5:
+            pooh_y += (final_y - pooh_y) / 10
+            self.pooh_position = (pooh_x, pooh_y)
+            self._draw_transit_frame(screen, show_indicators=True)
+            self.clock.tick(30)
+        while abs(pooh_x - final_x) > 2:
+            pooh_x += (final_x - pooh_x) / 10
+            self.pooh_position = (pooh_x, pooh_y)
+            self._draw_transit_frame(screen, show_indicators=True)
+            self.clock.tick(30)
+
+        self.green_circle_visible = False
+        self.red_x_visible = False
+        self.black_arrow_visible = False
+        return correct
+
+    def _shuffle_boxes(self, screen):
+        n_shuffles = np.random.choice(a=[5, 10, 15], size=1, replace=False).tolist()[0]
+        for _ in range(n_shuffles):
+            box_a, box_b = np.random.choice(a=list(self.boxes), size=2, replace=False).tolist()
+            x_a, y_a = self.boxes[box_a]["position_x"], self.boxes[box_a]["position_y"]
+            x_b, y_b = self.boxes[box_b]["position_x"], self.boxes[box_b]["position_y"]
+            box_a_moves_up_first = np.random.choice(a=["up", "down"], size=1, replace=False).tolist()[0] == "up"
+            speed = np.random.choice(a=[30, 60, 90], size=1, replace=False).tolist()[0]
+
+            thetas_up_ccw = np.linspace(start=0, stop=np.pi, num=speed)
+            thetas_down_ccw = np.linspace(start=np.pi, stop=2 * np.pi, num=speed)
+            thetas_up_cw = np.linspace(start=np.pi, stop=0, num=speed)
+            thetas_down_cw = np.linspace(start=2 * np.pi, stop=np.pi, num=speed)
+
+            center_x = 0.5 * (x_a + x_b)
+            center_y = 0.5 * (y_a + y_b)
+            radius = 0.5 * abs(x_a - x_b)
+
+            if x_a < x_b:
+                thetas_a, thetas_b = (thetas_up_cw, thetas_down_cw) if box_a_moves_up_first else (thetas_down_ccw, thetas_up_ccw)
+            else:
+                thetas_a, thetas_b = (thetas_up_ccw, thetas_down_ccw) if box_a_moves_up_first else (thetas_down_cw, thetas_up_cw)
+
+            for theta_a, theta_b in zip(thetas_a, thetas_b):
+                self.boxes[box_a]["position_x"] = radius * np.cos(theta_a) + center_x
+                self.boxes[box_a]["position_y"] = radius * np.sin(theta_a) + center_y
+                self.boxes[box_b]["position_x"] = radius * np.cos(theta_b) + center_x
+                self.boxes[box_b]["position_y"] = radius * np.sin(theta_b) + center_y
+                screen.fill(clr.WHITE)
+                self.tile_map.draw(screen)
+                self._draw_boxes(screen)
+                pygame.display.flip()
+                self.clock.tick(60)
+
+        order = boxes_left_to_right(self.boxes)
+        self.black_arrow_box = order[0]
+
+    # --- drawing ----------------------------------------------------------
+
+    def _draw_boxes(self, screen):
+        for box in self.boxes.values():
             viz.draw_rectangle(
-                screen=screen,
-                x=BOXES[box]['position_x'],
-                y=BOXES[box]['position_y'],
-                color=clr.NAVY,
-                width=BOX_WIDTH,
-                height=BOX_HEIGHT
+                screen=screen, x=box["position_x"], y=box["position_y"],
+                color=clr.NAVY, width=BOX_WIDTH, height=BOX_HEIGHT,
             )
             viz.draw_rectangle(
-                screen=screen,
-                x=BOXES[box]['position_x']-5,
-                y=BOXES[box]['position_y'],
-                color=clr.BLACK,
-                width=BOX_WIDTH+10,
-                height=10
+                screen=screen, x=box["position_x"] - 5, y=box["position_y"],
+                color=clr.BLACK, width=BOX_WIDTH + 10, height=10,
             )
-        return None
 
-    def move_pooh_into_box(box=None):
-        if POOH['visible']:
-            if not box:
-                choice = np.random.choice(a=N_BOXES, size=1, replace=False).tolist()[0]
-                BOX_X_POSITIONS = [(box, BOXES[box]['position_x']) for box in BOXES]
-                BOX_X_POSITIONS = sorted(BOX_X_POSITIONS, key=lambda x: x[1])
-                ORDER_LOOKUP = {index: box for index, box in enumerate([x[0] for x in BOX_X_POSITIONS])}
-                box = ORDER_LOOKUP[choice]
-            POOH['box'] = box
-            POOH_position = POOH['sprite_sheet'].get_position()
-            pooh_x = POOH_position[0]
-            pooh_y = POOH_position[1]
-            box_x = BOXES[box]['position_x']
-            box_y = BOXES[box]['position_y']
-            while np.abs(pooh_x - box_x) > 2:
-                pooh_x = POOH_position[0]
-                pooh_y = POOH_position[1]
-                POOH['sprite_sheet'].set_position(position=(pooh_x + (box_x - pooh_x) / 10, pooh_y))
-                POOH_position = POOH['sprite_sheet'].get_position()
-                screen.fill(clr.WHITE)
-                draw_tile_map()
-                screen.blit(POOH_frame, POOH_position)
-                draw_boxes()
-                pygame.display.flip()
-                clock.tick(30)
-            while np.abs(pooh_y - box_y) > 5:
-                pooh_x = POOH_position[0]
-                pooh_y = POOH_position[1]
-                POOH['sprite_sheet'].set_position(position=(pooh_x, pooh_y + (box_y - pooh_y) / 10))
-                screen.fill(clr.WHITE)
-                draw_tile_map()
-                POOH_position = POOH['sprite_sheet'].get_position()
-                screen.blit(POOH_frame, POOH_position)
-                draw_boxes()
-                pygame.display.flip()
-                clock.tick(30)
-            # Make Pooh invisible
-            POOH['visible'] = False
-            # Make black arrow visible
-            BLACK_ARROW['visible'] = True
-        return None
+    def _draw_green_circle(self, screen):
+        if self.green_circle_visible and self.pooh_box > -1:
+            box_x = self.boxes[self.black_arrow_box]["position_x"]
+            screen.blit(self.green_circle_frame, (box_x, 500))
 
-    def move_pooh_outside_box():
-        if POOH['box'] > -1:
-            box = POOH['box']
-            if not POOH['visible']:
-                POOH['visible'] = True
-                BLACK_ARROW['visible'] = False
-                if BLACK_ARROW['box'] == box:
-                    GREEN_CIRCLE['visible'] = True
-                else:
-                    RED_X['visible'] = True
-                final_POOH_position = (dms.SCREEN_WIDTH/2-POOH_WIDTH/2*POOH['sprite_sheet'].scale, 80)
-                final_POOH_position_x = final_POOH_position[0]
-                final_POOH_position_y = final_POOH_position[1]
-                box_x = BOXES[box]['position_x']
-                box_y = BOXES[box]['position_y']
-                POOH_position = (box_x, box_y)
-                POOH['sprite_sheet'].set_position(position=POOH_position)
-                pooh_x = box_x
-                pooh_y = box_y
-                while np.abs(pooh_y - final_POOH_position_y) > 5:
-                    pooh_x = POOH_position[0]
-                    pooh_y = POOH_position[1]
-                    POOH['sprite_sheet'].set_position(position=(pooh_x, pooh_y + (final_POOH_position_y - pooh_y) / 10))
-                    screen.fill(clr.WHITE)
-                    draw_tile_map()
-                    POOH_position = POOH['sprite_sheet'].get_position()
-                    screen.blit(POOH_frame, POOH_position)
-                    draw_boxes()
-                    draw_green_circle()
-                    draw_red_x()
-                    draw_black_arrow()
-                    pygame.display.flip()
-                    clock.tick(30)
-                while np.abs(pooh_x - final_POOH_position_x) > 2:
-                    pooh_x = POOH_position[0]
-                    pooh_y = POOH_position[1]
-                    POOH['sprite_sheet'].set_position(position=(pooh_x + (final_POOH_position_x - pooh_x) / 10, pooh_y))
-                    POOH_position = POOH['sprite_sheet'].get_position()
-                    screen.fill(clr.WHITE)
-                    draw_tile_map()
-                    screen.blit(POOH_frame, POOH_position)
-                    draw_boxes()
-                    draw_green_circle()
-                    draw_red_x()
-                    draw_black_arrow()
-                    pygame.display.flip()
-                    clock.tick(30)
-                GREEN_CIRCLE['visible'] = False
-                RED_X['visible'] = False
-                BLACK_ARROW['visible'] = False
-            return None
+    def _draw_red_x(self, screen):
+        if self.red_x_visible and self.pooh_box > -1:
+            box_x = self.boxes[self.black_arrow_box]["position_x"]
+            screen.blit(self.red_x_frame, (box_x, 500))
 
-    def shuffle_boxes():
-        if not POOH['visible']:
-            n_shuffles = np.random.choice(a=[5, 10, 15], size=1, replace=False).tolist()[0]
-            for _ in range(n_shuffles):
-                boxes_to_shuffle = np.random.choice(a=list(BOXES), size=2, replace=False).tolist()
-                initial_box_1_x = BOXES[boxes_to_shuffle[0]]['position_x']
-                initial_box_1_y = BOXES[boxes_to_shuffle[0]]['position_y']
-                initial_box_2_x = BOXES[boxes_to_shuffle[1]]['position_x']
-                initial_box_2_y = BOXES[boxes_to_shuffle[1]]['position_y']
-                box_1_y_movement = np.random.choice(a=['up', 'down'], size=1, replace=False).tolist()[0]
-                speed = np.random.choice(a=[30, 60, 90], size=1, replace=False).tolist()[0]
-                thetas_up_counterclockwise = np.linspace(start=0, stop=np.pi, num=speed)
-                thetas_down_counterclockwise = np.linspace(start=np.pi, stop=2 * np.pi, num=speed)
-                thetas_up_clockwise = np.linspace(start=np.pi, stop=0, num=speed)
-                thetas_down_clockwise = np.linspace(start=2*np.pi, stop=np.pi, num=speed)
-                center_x = 0.5 * (initial_box_1_x + initial_box_2_x)
-                center_y = 0.5 * (initial_box_1_y + initial_box_2_y)
-                radius = 0.5 * np.abs(initial_box_1_x - initial_box_2_x)
-                if initial_box_1_x < initial_box_2_x:
-                    if box_1_y_movement == 'up':
-                        # Box 1 --- Box 2
-                        # Box 1 ^, Box 2 v
-                        # (Box 1 moves clockwise, Box 2 moves clockwise)
-                        new_box_1_xs = radius * np.cos(thetas_up_clockwise) + center_x
-                        new_box_1_ys = radius * np.sin(thetas_up_clockwise) + center_y
-                        new_box_2_xs = radius * np.cos(thetas_down_clockwise) + center_x
-                        new_box_2_ys = radius * np.sin(thetas_down_clockwise) + center_y
-                    else:
-                        # Box 1 --- Box 2
-                        # Box 1 v, Box 2 ^
-                        # (Box 1 moves counterclockwise, Box 2 moves counterclockwise)
-                        new_box_1_xs = radius * np.cos(thetas_down_counterclockwise) + center_x
-                        new_box_1_ys = radius * np.sin(thetas_down_counterclockwise) + center_y
-                        new_box_2_xs = radius * np.cos(thetas_up_counterclockwise) + center_x
-                        new_box_2_ys = radius * np.sin(thetas_up_counterclockwise) + center_y
-                else:
-                    if box_1_y_movement == 'up':
-                        # Box 2 --- Box 1
-                        # Box 2 v, Box 1 ^
-                        # (Box 1 moves counterclockwise, Box 2 moves counterclockwise)
-                        new_box_1_xs = radius * np.cos(thetas_up_counterclockwise) + center_x
-                        new_box_1_ys = radius * np.sin(thetas_up_counterclockwise) + center_y
-                        new_box_2_xs = radius * np.cos(thetas_down_counterclockwise) + center_x
-                        new_box_2_ys = radius * np.sin(thetas_down_counterclockwise) + center_y
-                    else:
-                        # Box 2 --- Box 1
-                        # Box 2 ^, Box 1 v
-                        # (Box 1 moves clockwise, Box 2 moves clockwise)
-                        new_box_1_xs = radius * np.cos(thetas_down_clockwise) + center_x
-                        new_box_1_ys = radius * np.sin(thetas_down_clockwise) + center_y
-                        new_box_2_xs = radius * np.cos(thetas_up_clockwise) + center_x
-                        new_box_2_ys = radius * np.sin(thetas_up_clockwise) + center_y
-                for b1x, b1y, b2x, b2y in zip(new_box_1_xs, new_box_1_ys, new_box_2_xs, new_box_2_ys):
-                    BOXES[boxes_to_shuffle[0]]['position_x'] = b1x
-                    BOXES[boxes_to_shuffle[0]]['position_y'] = b1y
-                    BOXES[boxes_to_shuffle[1]]['position_x'] = b2x
-                    BOXES[boxes_to_shuffle[1]]['position_y'] = b2y
-                    screen.fill(clr.WHITE)
-                    draw_tile_map()
-                    draw_boxes()
-                    pygame.display.flip()
-                    clock.tick(60)
-            BOX_X_POSITIONS = [(box, BOXES[box]['position_x']) for box in BOXES]
-            BOX_X_POSITIONS = sorted(BOX_X_POSITIONS, key=lambda x: x[1])
-            ORDER_LOOKUP = {index: box for index, box in enumerate([x[0] for x in BOX_X_POSITIONS])}
-            box = ORDER_LOOKUP[0]
-            BLACK_ARROW['box'] = box
-        return None
+    def _draw_black_arrow(self, screen):
+        if self.black_arrow_visible:
+            box_x = self.boxes[self.black_arrow_box]["position_x"]
+            screen.blit(self.black_arrow_frame, (box_x, 500))
 
-    clock = pygame.time.Clock()
-
-    screen.fill(clr.WHITE)
-    draw_tile_map()
-    if POOH['visible']:
-        screen.blit(POOH_frame, POOH['sprite_sheet'].get_position())
-    draw_boxes()
-    draw_green_circle()
-
-    running = True
-
-    # POOH_box = np.random.choice(a=[0, 1, 2], size=1, replace=False).tolist()[0]
-    POOH_box = None
-
-    show_instructions = True
-
-    def draw_instructions():
-        if show_instructions:
+    def _draw_instructions(self, screen):
+        if self.show_instructions:
             instructions = fnt.font.render("Press Space to Begin", True, clr.BLACK)
-            screen.blit(instructions, (dms.SCREEN_WIDTH/2-len("Press Space to Begin")*13, 600))
-        return None
+            screen.blit(instructions, (dms.SCREEN_WIDTH / 2 - len("Press Space to Begin") * 13, 600))
 
-    while running:
+    def update(self, dt):
+        pass
 
+    def draw(self, screen):
         screen.fill(clr.WHITE)
-        draw_tile_map()
-        if POOH['visible']:
-            screen.blit(POOH_frame, POOH['sprite_sheet'].get_position())
-        draw_boxes()
-        draw_green_circle()
-        draw_red_x()
-        draw_black_arrow()
-        draw_instructions()
+        self.tile_map.draw(screen)
+        if self.pooh_visible:
+            screen.blit(self.pooh_frame, self.pooh_position)
+        self._draw_boxes(screen)
+        self._draw_green_circle(screen)
+        self._draw_red_x(screen)
+        self._draw_black_arrow(screen)
+        self._draw_instructions(screen)
 
-        # Update the screen
-        pygame.display.flip()
+        if self.won:
+            self._celebrate_and_finish(screen)
 
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                pygame.quit()
-                sys.exit()
-            if event.type == pygame.KEYDOWN:
-                # Get key states
-                keys = pygame.key.get_pressed()
-                if keys[pygame.K_ESCAPE]:
-                    screens.menu_pause.show_pause_menu(screen=screen, game_variables=game_variables)
-                elif keys[pygame.K_SPACE]:
-                    if show_instructions:
-                        show_instructions = False
-                    if POOH['visible']:
-                        move_pooh_into_box(box=POOH_box)
-                        shuffle_boxes()
-                    else:
-                        move_pooh_outside_box()
-                elif keys[pygame.K_LEFT]:
-                    move_black_arrow(direction='left')
-                elif keys[pygame.K_RIGHT]:
-                    move_black_arrow(direction='right')
-                # elif keys[pygame.K_s]:
-                #     shuffle_boxes()
-                # elif keys[pygame.K_d]:
-                #     move_pooh_outside_box()
-                else:
-                    pass
-
-        # Update the display
+    def _celebrate_and_finish(self, screen):
         screen.fill(clr.WHITE)
-        draw_tile_map()
-        if POOH['visible']:
-            screen.blit(POOH_frame, POOH['sprite_sheet'].get_position())
-        draw_boxes()
-        draw_green_circle()
-        draw_red_x()
-        draw_black_arrow()
-        draw_instructions()
+        self.tile_map.draw(screen)
+        congratulations_text = fnt.font.render("GREAT JOB!", True, clr.DARK_GREEN)
+        screen.blit(congratulations_text, (dms.SCREEN_WIDTH / 2 - 150, dms.SCREEN_HEIGHT / 2 - 50))
         pygame.display.flip()
-
-        # Cap the frame rate
-        clock.tick(stt.FRAMES_PER_SECOND)
-
-    screen.fill(clr.WHITE)
-    draw_tile_map()
-    congratulations_text = fnt.font.render('GREAT JOB!', True, clr.DARK_GREEN)
-    screen.blit(congratulations_text, (dms.SCREEN_WIDTH/2-150, dms.SCREEN_HEIGHT/2-50))
-    pygame.display.flip()
-    pygame.time.wait(3000)
-    aud.stop_music()
-    screens.menu_end_minigame.show_end_minigame_menu(
-        screen=screen,
-        game_variables=game_variables,
-        game_screen=show_game_find_pooh
-    )
+        pygame.time.wait(3000)
+        aud.stop_music()
+        self.state.record_high_score("find_pooh", self.rounds_played, higher_is_better=False)
+        self.state.save()
+        self.next_scene = screens.menu_end_minigame.EndMinigameScene(
+            minigame_factory=lambda: FindPoohScene(state=self.state), state=self.state,
+        )

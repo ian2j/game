@@ -25,3 +25,11 @@ def get_frame(sheet, frame_width, frame_height, column, row, scale_factor=1):
     new_width = int(frame_width * scale_factor)
     new_height = int(frame_height * scale_factor)
     return pygame.transform.scale(frame, size=(new_width, new_height))
+
+
+def load_static_frame(path, width, height, scale=1):
+    """Load an image file and pull out its single (column 0, row 0) frame,
+    scaled. A shorthand for the many places that need one fixed sprite
+    rather than a full animated sheet."""
+    sheet = pygame.image.load(path).convert_alpha()
+    return get_frame(sheet=sheet, frame_width=width, frame_height=height, column=0, row=0, scale_factor=scale)

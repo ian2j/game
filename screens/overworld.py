@@ -1,275 +1,193 @@
 import pygame
-import objects.characters as crs
-import objects.sprite_sheets as sps
-import constants.dimensions as dms
+
 import constants.colors as clr
-import constants.flags as flg
+import constants.dimensions as dms
 import constants.fonts as fnt
 import constants.settings as stt
 import functions.audio as aud
 import functions.visual as viz
-import screens.menu_pause
-import screens.game_letter_matching
+import objects.characters as crs
+import objects.doors as drs
+import objects.tilemap as tmp
+import screens.game_catch_stars
 import screens.game_find_pooh
-import numpy as np
-import sys
+import screens.game_letter_matching
+import screens.menu_pause
+import screens.scene_base as scb
+
+ANIMATION_SPEED = 100  # ms per animation frame
+
+_CENTERED_SPAWN = (
+    dms.SCREEN_WIDTH / 2 - stt.PLAYER_FRAME_WIDTH * stt.PLAYER_SCALE / 2,
+    dms.SCREEN_HEIGHT / 2 - stt.PLAYER_FRAME_HEIGHT * stt.PLAYER_SCALE / 2,
+)
+
+ROOMS = {
+    "main": {
+        "spawn": _CENTERED_SPAWN,
+        "floor_color": clr.WHITE,
+        "wall_color": clr.GREY,
+    },
+    "outside": {
+        "spawn": _CENTERED_SPAWN,
+        "floor_color": clr.LIGHT_GREEN,
+        "wall_color": clr.DARK_GREEN,
+    },
+}
 
 
-def show_overworld(screen, game_variables):
-    # pygame.time.wait(300)
-    if not flg.PYGAME_MIXER_INITIALIZED:
-        aud.start_mixer()
-    aud.load_music(filename="sounds/sample_music_2.mp3")
-    aud.play_music_on_loop()
+def _build_animations(player):
+    columns = {"down": 0, "up": 1, "left": 2, "right": 3}
+    return {
+        direction: [
+            viz.get_frame(
+                sheet=player.sprite_sheet,
+                frame_width=player.frame_width,
+                frame_height=player.frame_height,
+                column=column,
+                row=row,
+                scale_factor=player.scale,
+            )
+            for row in range(4)
+        ]
+        for direction, column in columns.items()
+    }
 
-    player = crs.Player()
-    player.set_sprite_sheet(sprite_sheet=game_variables['variables']['player_costume_sprite'])
-    player.set_frame_width(frame_width=21)
-    player.set_frame_height(frame_height=22)
-    player.set_scale(scale=6)
-    player.set_position(game_variables['variables']['player_position'])
-    current_direction = game_variables['variables']['player_direction']
-    frame_index = 0  # Current animation frame
 
-    tile_map = np.zeros(int(dms.SCREEN_HEIGHT / dms.TILE_SIZE) * int(dms.SCREEN_WIDTH / dms.TILE_SIZE)).reshape(
-        int(dms.SCREEN_HEIGHT / dms.TILE_SIZE),
-        int(dms.SCREEN_WIDTH / dms.TILE_SIZE)
-    )
-    tile_map[:, :2] = 1
-    tile_map[:, -2:] = 1
-    tile_map[:2, :] = 1
-    tile_map[-2:, :] = 1
+class OverworldScene(scb.Scene):
+    def __init__(self, state, room_id):
+        super().__init__()
+        self.state = state
+        self.room_id = room_id
 
-    # Testing an idea
-    tile_map[10:20, 10:20] = 1
-    tile_map[10:20, -20:-11] = 1
+        room = ROOMS[room_id]
+        if state.current_room != room_id:
+            state.player_position = room["spawn"]
+        state.current_room = room_id
 
-    def draw_tile_map():
-        for row in range(len(tile_map)):
-            for col in range(len(tile_map[row])):
-                tile = tile_map[row][col]
-                x = col * dms.TILE_SIZE
-                y = row * dms.TILE_SIZE
-                if tile == 1:  # Wall
-                    pygame.draw.rect(screen, clr.GREY, rect=(x, y, dms.TILE_SIZE, dms.TILE_SIZE))
-                elif tile == 0:  # Floor
-                    pygame.draw.rect(screen, clr.WHITE, rect=(x, y, dms.TILE_SIZE, dms.TILE_SIZE))
+        aud.play_looping_track(filename="sounds/sample_music_2.mp3")
 
-    def can_move(new_x, new_y):
-        grid_x_left = int(new_x / dms.TILE_SIZE)
-        grid_x_right = int((new_x + player.frame_width / 2 * player.scale * 2) / dms.TILE_SIZE)
-        grid_y_up = int(new_y / dms.TILE_SIZE)
-        grid_y_down = int((new_y + player.frame_height / 2 * player.scale * 2) / dms.TILE_SIZE)
-        checksum = (
-                tile_map[grid_y_up][grid_x_left] +
-                tile_map[grid_y_up][grid_x_right] +
-                tile_map[grid_y_down][grid_x_left] +
-                tile_map[grid_y_down][grid_x_right]
+        self.player = crs.Player()
+        self.player.set_sprite_sheet(sprite_sheet=state.player_sprite_sheet)
+        self.player.set_frame_width(frame_width=stt.PLAYER_FRAME_WIDTH)
+        self.player.set_frame_height(frame_height=stt.PLAYER_FRAME_HEIGHT)
+        self.player.set_scale(scale=stt.PLAYER_SCALE)
+        self.player.set_position(position=state.player_position)
+        self.player.direction = state.player_direction
+
+        self.tile_map = tmp.TileMap(
+            width=dms.SCREEN_WIDTH, height=dms.SCREEN_HEIGHT, tile_size=dms.TILE_SIZE,
+            wall_color=room["wall_color"], floor_color=room["floor_color"],
         )
-        if checksum > 0:
-            return False
-        return True
 
-    # Create a dictionary for animations
-    animations = {
-        "down": [
-            viz.get_frame(
-                sheet=player.sprite_sheet,
-                frame_width=player.frame_width,
-                frame_height=player.frame_height,
-                column=0,
-                row=row,
-                scale_factor=player.scale
-            ) for row in range(4)
-        ],
-        "up": [
-            viz.get_frame(
-                sheet=player.sprite_sheet,
-                frame_width=player.frame_width,
-                frame_height=player.frame_height,
-                column=1,
-                row=row,
-                scale_factor=player.scale
-            ) for row in range(4)
-        ],
-        "left": [
-            viz.get_frame(
-                sheet=player.sprite_sheet,
-                frame_width=player.frame_width,
-                frame_height=player.frame_height,
-                column=2,
-                row=row,
-                scale_factor=player.scale
-            ) for row in range(4)
-        ],
-        "right": [
-            viz.get_frame(
-                sheet=player.sprite_sheet,
-                frame_width=player.frame_width,
-                frame_height=player.frame_height,
-                column=3,
-                row=row,
-                scale_factor=player.scale
-            ) for row in range(4)
-        ],
-    }
+        self.animations = _build_animations(self.player)
+        self.frame_index = 0
+        self.last_update_time = pygame.time.get_ticks()
+        self.moving = False
 
-    clock = pygame.time.Clock()
+        self.doors = self._build_doors()
 
-    screen.fill(clr.WHITE)
-    draw_tile_map()
+    def _build_doors(self):
+        if self.room_id == "main":
+            return [
+                drs.Door.from_icon_files(
+                    door_id="letter_matching", label="Letter Matching", position=(200, 200),
+                    icon_unselected="sprites/minigame_icons/letter_matching.png",
+                    icon_selected="sprites/minigame_icons/letter_matching_selected.png",
+                    on_enter=self._enter_letter_matching,
+                ),
+                drs.Door.from_icon_files(
+                    door_id="find_pooh", label="    Find Pooh", position=(880, 200),
+                    icon_unselected="sprites/minigame_icons/find_pooh.png",
+                    icon_selected="sprites/minigame_icons/find_pooh_selected.png",
+                    on_enter=self._enter_find_pooh,
+                ),
+                drs.Door.plain(
+                    door_id="to_outside", label="Outside", position=(580, 560),
+                    on_enter=lambda: self._enter_room("outside"),
+                ),
+            ]
+        elif self.room_id == "outside":
+            return [
+                drs.Door.plain(
+                    door_id="to_main", label="Luna's Room", position=(580, 560),
+                    on_enter=lambda: self._enter_room("main"),
+                ),
+                drs.Door.plain(
+                    door_id="catch_stars", label="Catch the Stars", position=(880, 200), size=(160, 200),
+                    on_enter=self._enter_catch_stars,
+                ),
+            ]
+        raise ValueError(f"Unknown room_id: {self.room_id}")
 
-    # Animation timing (milliseconds per frame)
-    ANIMATION_SPEED = 100  # 100ms per frame = 10 frames per second
+    def _enter_room(self, room_id):
+        self.next_scene = OverworldScene(state=self.state, room_id=room_id)
 
-    # Initialize variables for time-based animation
-    last_update_time = pygame.time.get_ticks()
+    def _enter_letter_matching(self):
+        self.next_scene = screens.game_letter_matching.LetterMatchingScene(state=self.state)
 
-    # Initialize mini-games
-    MINIGAMES = {
-        'Letter Matching': {
-            'sprite_unselected': 'sprites/minigame_icons/letter_matching.png',
-            'sprite_selected': 'sprites/minigame_icons/letter_matching_selected.png',
-            'position_x': 200,
-            'position_y': 200,
-            'selected': False,
-            'game_screen': screens.game_letter_matching.show_game_letter_matching
-        },
-        '    Find Pooh': {
-            'sprite_unselected': 'sprites/minigame_icons/find_pooh.png',
-            'sprite_selected': 'sprites/minigame_icons/find_pooh_selected.png',
-            'position_x': 880,
-            'position_y': 200,
-            'selected': False,
-            'game_screen': screens.game_find_pooh.show_game_find_pooh
-        }
-    }
+    def _enter_find_pooh(self):
+        self.next_scene = screens.game_find_pooh.FindPoohScene(state=self.state)
 
-    def draw_minigames(player_position):
-        player_x = player_position[0]
-        player_y = player_position[1]
-        for minigame in MINIGAMES:
-            center_x = MINIGAMES[minigame]['position_x']
-            center_y = MINIGAMES[minigame]['position_y']
-            close_x = True if np.abs(player_x - center_x) < 250 else False
-            close_y = True if np.abs(player_y - center_y) < 250 else False
-            if close_x and close_y:
-                MINIGAMES[minigame]['selected'] = True
-            else:
-                MINIGAMES[minigame]['selected'] = False
-            minigame_object = sps.SpriteSheet()
-            sprite_sheet = MINIGAMES[minigame]['sprite_selected'] if MINIGAMES[minigame]['selected'] \
-                else MINIGAMES[minigame]['sprite_unselected']
-            minigame_object.set_sprite_sheet(sprite_sheet=sprite_sheet)
-            minigame_object.set_frame_width(frame_width=200)
-            minigame_object.set_frame_height(frame_height=200)
-            minigame_object.set_scale(scale=1)
-            minigame_frame = viz.get_frame(
-                sheet=minigame_object.sprite_sheet,
-                frame_width=minigame_object.frame_width,
-                frame_height=minigame_object.frame_height,
-                row=0,
-                column=0,
-                scale_factor=minigame_object.scale
-            )
-            minigame_position = (MINIGAMES[minigame]['position_x'], MINIGAMES[minigame]['position_y'])
-            screen.blit(minigame_frame, minigame_position)
-            minigame_title = fnt.small_font.render(
-                minigame, True, clr.BLUE if MINIGAMES[minigame]['selected'] else clr.BLACK
-            )
-            title_position = (MINIGAMES[minigame]['position_x']+10, MINIGAMES[minigame]['position_y']-30)
-            close_x = True if np.abs(player_x - title_position[0]) < 50 else False
-            close_y = True if np.abs(player_y - title_position[1]) < 50 else False
-            if not (close_x and close_y):
-                screen.blit(minigame_title, title_position)
+    def _enter_catch_stars(self):
+        self.next_scene = screens.game_catch_stars.CatchStarsScene(state=self.state)
 
-    running = True
+    def handle_event(self, event, screen):
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE:
+                self.next_scene = screens.menu_pause.PauseMenuScene(resume_scene=self, state=self.state)
+            elif event.key == pygame.K_SPACE:
+                for door in self.doors:
+                    if door.selected:
+                        door.on_enter()
 
-    while running:
-
-        player_position = player.get_position()
-        player_x = player_position[0]
-        player_y = player_position[1]
-
-        draw_minigames(player_position=player_position)
-
-        # Update the screen
-        pygame.display.flip()
-
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                pygame.quit()
-                sys.exit()
-
-        # Get key states
+    def update(self, dt):
         keys = pygame.key.get_pressed()
-
-        # Update direction and position
-        moving = False  # Track if the player is moving this frame
+        player_x, player_y = self.player.get_position()
         new_x, new_y = player_x, player_y
-        if keys[pygame.K_UP]:
-            current_direction = "up"
-            new_y -= 5
-            moving = True
-        elif keys[pygame.K_DOWN]:
-            current_direction = "down"
-            new_y += 5
-            moving = True
-        elif keys[pygame.K_LEFT]:
-            current_direction = "left"
-            new_x -= 5
-            moving = True
-        elif keys[pygame.K_RIGHT]:
-            current_direction = "right"
-            new_x += 5
-            moving = True
-        elif keys[pygame.K_ESCAPE]:
-            screens.menu_pause.show_pause_menu(screen=screen, game_variables=game_variables)
-            pygame.time.wait(100)
-        elif keys[pygame.K_SPACE]:
-            for minigame in MINIGAMES:
-                if MINIGAMES[minigame]['selected']:
-                    MINIGAMES[minigame]['game_screen'](screen=screen, game_variables=game_variables)
-        else:
-            pass
+        self.moving = False
 
-        if can_move(new_x=new_x, new_y=player_y):
+        if keys[pygame.K_UP]:
+            self.player.direction = "up"
+            new_y -= 5
+            self.moving = True
+        elif keys[pygame.K_DOWN]:
+            self.player.direction = "down"
+            new_y += 5
+            self.moving = True
+        elif keys[pygame.K_LEFT]:
+            self.player.direction = "left"
+            new_x -= 5
+            self.moving = True
+        elif keys[pygame.K_RIGHT]:
+            self.player.direction = "right"
+            new_x += 5
+            self.moving = True
+
+        width = self.player.frame_width * self.player.scale
+        height = self.player.frame_height * self.player.scale
+        if self.tile_map.can_move(new_x, player_y, width, height):
             player_x = new_x
-        if can_move(new_x=player_x, new_y=new_y):
+        if self.tile_map.can_move(player_x, new_y, width, height):
             player_y = new_y
 
-        player.set_position((player_x, player_y))
-        game_variables['variables']['player_position'] = (player_x, player_y)
-        game_variables['variables']['player_direction'] = current_direction
-        player_position = player.get_position()
+        self.player.set_position((player_x, player_y))
+        self.state.player_position = (player_x, player_y)
+        self.state.player_direction = self.player.direction
 
-        # Update state based on movement
-        if moving:
-            current_state = "moving"
-        else:
-            current_state = "idle"
+        for door in self.doors:
+            door.update_selection((player_x, player_y))
 
-        # Get the current time
         current_time = pygame.time.get_ticks()
+        if self.moving and current_time - self.last_update_time > ANIMATION_SPEED:
+            self.last_update_time = current_time
+            self.frame_index = (self.frame_index + 1) % len(self.animations[self.player.direction])
+        elif not self.moving:
+            self.frame_index = 0
 
-        # Update animation frame only if moving
-        if current_state == "moving" and current_time - last_update_time > ANIMATION_SPEED:
-            last_update_time = current_time
-            frame_index = (frame_index + 1) % len(animations[current_direction])
-        elif current_state == "idle":
-            # Reset to the idle frame for the current direction
-            frame_index = 0
-
-        screen.fill(clr.WHITE)
-        draw_tile_map()
-        draw_minigames(player_position=player_position)
-
-        # Draw the current frame
-        current_frame = animations[current_direction][frame_index]
-        screen.blit(current_frame, player_position)
-
-        # Update the display
-        pygame.display.flip()
-
-        # Cap the frame rate
-        clock.tick(stt.FRAMES_PER_SECOND)
+    def draw(self, screen):
+        self.tile_map.draw(screen)
+        for door in self.doors:
+            door.draw(screen, self.player.get_position(), fnt.small_font)
+        current_frame = self.animations[self.player.direction][self.frame_index]
+        screen.blit(current_frame, self.player.get_position())
